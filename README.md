@@ -73,10 +73,10 @@ Without one, a disc is only named automatically if its label includes the year.
 
 ```sh
 # pipx keeps it in its own environment (apt install pipx / brew install pipx)
-pipx install "git+https://github.com/OWNER/jfripper.git"
+pipx install "git+https://github.com/jad77/JFRipper.git"
 
 # with audio-CD lookups (Linux)
-pipx install "jfripper[cd] @ git+https://github.com/OWNER/jfripper.git"
+pipx install "jfripper[cd] @ git+https://github.com/jad77/JFRipper.git"
 ```
 
 Then check what's missing:
