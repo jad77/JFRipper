@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Your own settings (may hold API keys and passwords)
+config.toml
+!jfripper/config.example.toml
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

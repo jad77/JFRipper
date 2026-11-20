@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jfripper"
+dynamic = ["version"]
+description = "Put a disc in the drive, get a properly named file in your Jellyfin library."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Jonathan Davis" }]
+requires-python = ">=3.9"
+dependencies = [
+    "guessit>=3.7",
+    "mutagen>=1.45",
+    'tomli>=1.1; python_version < "3.11"',
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: No Input/Output (Daemon)",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video :: Conversion",
+    "Topic :: Multimedia :: Sound/Audio :: CD Audio :: CD Ripping",
+]
+
+[project.optional-dependencies]
+cd = ["discid>=1.2", "musicbrainzngs>=0.7"]
+
+[project.scripts]
+jfripper = "jfripper.cli:main"
+
+[tool.setuptools]
+packages = ["jfripper"]
+
+[tool.setuptools.package-data]
+jfripper = ["config.example.toml"]
+
+[tool.setuptools.dynamic]
+version = { attr = "jfripper.__version__" }

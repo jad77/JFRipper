@@ -1,0 +1,62 @@
+# JFRipper settings. Save as ~/.config/jfripper/config.toml (or /etc/jfripper/config.toml).
+# Every setting is optional; the values shown are the defaults.
+
+# Where job records and the log live. Empty = ~/.local/state/jfripper (Linux),
+# /var/lib/jfripper (Linux as root), ~/Library/Application Support/JFRipper (macOS).
+state_dir = ""
+
+[library]
+# Your Jellyfin media folder. The folders below are created inside it
+# (or give an absolute path to put one somewhere else).
+root = "/mnt/media"
+movies = "Movies"
+tv = "TV"
+music = "Music"
+incoming = "_incoming"        # drop files here yourself and they get sorted too
+review = "_needs_review"      # anything that couldn't be named confidently waits here
+work = "_rip"                 # raw rips while they're being converted (same disk = instant moves)
+
+[rip]
+drives = []                   # empty = every drive. Linux: ["/dev/sr0"]; macOS: [1]
+makemkvcon = ""               # empty = find it on PATH or in /Applications/MakeMKV.app
+min_movie_minutes = 20
+scan_min_minutes = 15         # titles shorter than this are ignored
+episode_max_minutes = 70      # a disc of titles all shorter than this is treated as TV
+stall_minutes = 10            # a rip try that makes no progress this long is given up
+slow_speed = 32               # retry read speed (Linux only), in CD "x"; 32 is about 4x DVD
+refresh_beta_key = false      # fetch MakeMKV's free public beta key from its forum before each rip
+rip_on_start = true           # rip a disc that's already in the drive when JFRipper starts
+poll_seconds = 5
+
+[encode]
+encoder = "auto"              # auto | qsv | vaapi | nvenc | videotoolbox | x264
+quality = 21                  # lower = better and bigger; 18-23 is sensible
+ffmpeg = ""                   # empty = jellyfin-ffmpeg if installed, else ffmpeg on PATH
+ffprobe = ""
+render_device = "/dev/dri/renderD128"   # Linux Quick Sync / VA-API
+
+[sorter]
+tmdb_api_key = ""             # free at themoviedb.org; or set $TMDB_API_KEY. Strongly recommended.
+interval_seconds = 60
+settle_seconds = 60
+
+[status]
+enabled = true
+host = "0.0.0.0"              # "127.0.0.1" to keep the page on this machine only
+port = 8097
+allow_naming = true           # name waiting rips from the page
+public_url = ""               # e.g. "http://mediaserver.local:8097", added to notifications
+
+[notify]
+# Use any, all, or none.
+ntfy_url = ""                 # e.g. "https://ntfy.sh/pick-a-long-random-topic"
+ntfy_token = ""
+webhook_url = ""              # Discord/Slack/Home Assistant/anything that takes JSON
+command = ""                  # run as: <command> "<subject>", with the message on stdin
+smtp_host = ""
+smtp_port = 587
+smtp_starttls = true
+smtp_user = ""
+smtp_password = ""
+smtp_from = ""
+smtp_to = ""
