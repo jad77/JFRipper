@@ -482,6 +482,50 @@ class SorterTests(TempLibrary):
         self.assertTrue(os.path.exists(os.path.join(self.cfg.review, "notes.xyz")))
 
 
+class SettingsTests(TempLibrary):
+    def setUp(self):
+        super().setUp()
+        self.path = os.path.join(self.root, "config.toml")
+        self.cfg.path = self.path
+
+    def test_secrets_never_leave_and_blank_keeps_them(self):
+        from jfripper import settings
+        res = settings.save({"notify.smtp_host": "mail.example.com",
+                             "notify.smtp_password": "hunter2", "cd.format": "mp3"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
+        view = settings.view()
+        self.assertNotIn("hunter2", json.dumps(view))
+        pw = next(f for f in view["fields"] if f["key"] == "smtp_password")
+        self.assertEqual((pw["is_set"], "value" in pw), (True, False))
+        # Saving again with the password left blank keeps it; the new values are live.
+        self.assertTrue(settings.save({"notify.smtp_password": "", "cd.mp3_quality": "2"})["ok"])
+        c = config.conf()
+        self.assertEqual((c.notify["smtp_password"], c.cd["format"], c.cd["mp3_quality"]),
+                         ("hunter2", "mp3", 2))
+        # The file only holds what differs from the defaults, and loads back the same.
+        self.assertEqual(config.load(self.path).data, c.data)
+        self.assertTrue(settings.save({"notify.smtp_password": {"clear": True}})["ok"])
+        self.assertEqual(config.conf().notify["smtp_password"], "")
+
+    def test_refusals(self):
+        from jfripper import settings
+        for changes in ({"notify.command": "rm -rf /"}, {"encode.ffmpeg": "/tmp/evil"},
+                        {"status.port": "99999"}, {"cd.format": "ogg"},
+                        {"library.root": "/no/such/folder"}, {"notify.webhook_url": "file:///etc"},
+                        {"rip.drives": "sr0; reboot"}, {"nope.nothing": 1}):
+            res = settings.save(changes)
+            self.assertFalse(res["ok"], changes)
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_restart_flag_and_drives(self):
+        from jfripper import settings
+        res = settings.save({"status.port": "8100", "rip.drives": "/dev/sr0, /dev/sr1"})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(sorted(res["restart"]), ["Drives", "Port"])
+        self.assertEqual(config.conf().rip["drives"], ["/dev/sr0", "/dev/sr1"])
+
+
 class StatusPageTests(TempLibrary):
     def test_api(self):
         from http.server import ThreadingHTTPServer

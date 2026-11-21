@@ -13,10 +13,12 @@ from .util import log
 
 
 def notify(subject, body):
+    """Send through every configured channel. Returns [(channel, error or None)]."""
     n = conf().notify
     url = conf().status["public_url"]
     body = body + (f"\n\nStatus page: {url}" if url else "") + f"\n\n- JFRipper on {socket.gethostname()}"
     log(f"notice: {subject}")
+    results = []
     for name, configured, send in (("ntfy", n["ntfy_url"], _ntfy),
                                    ("webhook", n["webhook_url"], _webhook),
                                    ("command", n["command"], _command),
@@ -25,8 +27,11 @@ def notify(subject, body):
             continue
         try:
             send(n, subject, body)
+            results.append((name, None))
         except Exception as exc:
             log(f"{name} notification failed: {exc!r}")
+            results.append((name, str(exc) or exc.__class__.__name__))
+    return results
 
 
 def _post_json(url, payload, headers=None):

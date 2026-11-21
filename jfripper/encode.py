@@ -83,6 +83,13 @@ def encoder_works(name):
         return False
 
 
+def reset():
+    """Forget the chosen encoder (the settings changed)."""
+    global _detected
+    with _detect_lock:
+        _detected = None
+
+
 def candidates():
     return ["videotoolbox", "x264"] if IS_MAC else ["qsv", "vaapi", "nvenc", "x264"]
 

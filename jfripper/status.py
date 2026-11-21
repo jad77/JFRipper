@@ -7,7 +7,7 @@ import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import VERSION_LABEL, jobs, naming
+from . import VERSION_LABEL, jobs, naming, settings
 from .config import conf
 from .util import log
 
@@ -114,7 +114,7 @@ def name_job(req):
     return naming.movie(stamp, req.get("title") or "", req.get("year") or "")
 
 
-PAGE = r"""<!doctype html>
+HEAD = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>JFRipper</title>
@@ -126,7 +126,10 @@ PAGE = r"""<!doctype html>
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
 main{max-width:640px;margin:0 auto;padding:28px 16px 48px}
-h1{font-size:15px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 16px}
+nav{display:flex;align-items:center;gap:6px;margin:0 0 18px}
+nav b{font-size:15px;font-weight:650;letter-spacing:.02em;margin-right:auto}
+nav a{font-size:14px;color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:99px}
+nav a.on{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:14px}
 .title{font-size:22px;font-weight:650;margin:0 0 2px}
 .stage{color:var(--muted);font-size:14px;margin-bottom:16px}
@@ -160,8 +163,10 @@ button:disabled{opacity:.5}
 .msg{font-size:14px;margin-top:8px;grid-column:1/-1}
 .path{font-size:12.5px;color:var(--muted);word-break:break-all}
 footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
-</style></head><body><main>
-<h1>JFRipper</h1>
+"""
+
+PAGE = HEAD + r"""</style></head><body><main>
+<nav><b>JFRipper</b><a href="./" class="on">Status</a><a href="settings">Settings</a></nav>
 <div id="active"></div>
 <div id="needs"></div>
 <div class="card"><div class="label">Recent discs</div><ul id="recent"></ul></div>
@@ -257,6 +262,103 @@ tick(); setInterval(tick,5000);
 </script></body></html>"""
 
 
+SETTINGS_PAGE = HEAD + r"""
+.field{display:grid;gap:4px;padding:12px 0;border-top:1px solid var(--line)}
+.field:first-of-type{border-top:0}
+.field label{font-size:15px;font-weight:550}
+.field .help{font-size:12.5px;color:var(--muted)}
+.field .ro{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);word-break:break-all}
+.flag{font-size:11px;font-weight:600;color:var(--warn);margin-left:6px}
+select{font:inherit;font-size:15px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.toggle{display:flex;align-items:center;gap:10px}
+.toggle input{width:auto;transform:scale(1.25)}
+.clear{font-size:12.5px;color:var(--accent);background:none;padding:0;font-weight:500;justify-self:start}
+.savebar{position:sticky;bottom:0;padding:12px 0 calc(12px + env(safe-area-inset-bottom,0px));background:var(--bg);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.secondary{background:var(--bar);color:var(--ink)}
+.dirty{outline:2px solid var(--accent);outline-offset:1px}
+</style></head><body><main>
+<nav><b>JFRipper</b><a href="./">Status</a><a href="settings" class="on">Settings</a></nav>
+<div id="where" class="path" style="margin:-8px 0 14px"></div>
+<div id="cards">Loading…</div>
+<div class="savebar"><button id="save" disabled>Save changes</button><span id="msg" class="msg" style="margin:0"></span></div>
+<footer>Open to anyone on your network. The notification command and program paths can only be changed in the config file; saved passwords and keys are never shown.</footer>
+</main>
+<script>
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let fields=[], changes={};
+function input(f){
+  const id=`${f.section}.${f.key}`;
+  if(f.readonly) return `<div class="ro">${esc(f.value)||"(not set)"}</div>`;
+  if(f.kind==="bool") return `<div class="toggle"><input type="checkbox" data-id="${id}" ${f.value?"checked":""}><span class="help">${f.value?"On":"Off"}</span></div>`;
+  if(f.kind==="choice") return `<select data-id="${id}">${f.choices.map(c=>`<option ${c===f.value?"selected":""}>${esc(c)}</option>`).join("")}</select>`;
+  if(f.secret) return `<input type="password" data-id="${id}" autocomplete="new-password" placeholder="${f.is_set?"Saved - type to replace":"Not set"}">`+
+    (f.is_set?`<button type="button" class="clear" data-clear="${id}">Remove saved value</button>`:"");
+  return `<input type="${f.kind==="int"?"number":"text"}" data-id="${id}" value="${esc(f.value)}" autocomplete="off">`;
+}
+function render(v){
+  document.getElementById("where").textContent=(v.writable?"Saved to ":"Can't write ")+v.config_path;
+  const bySec={}; v.fields.forEach(f=>(bySec[f.section]=bySec[f.section]||[]).push(f));
+  let html="";
+  for(const [sec,title] of Object.entries(v.sections)){
+    html+=`<div class="card"><div class="label">${esc(title)}</div>`+bySec[sec].map(f=>`<div class="field">
+      <label>${esc(f.label)}${f.restart?'<span class="flag">after restart</span>':""}</label>${input(f)}
+      ${f.help?`<div class="help">${esc(f.help)}</div>`:""}</div>`).join("");
+    if(sec==="notify") html+=`<div class="field"><button type="button" class="secondary" id="test">Send test notification</button><div class="help" id="testmsg">Uses the saved settings.</div></div>`;
+    html+=`</div>`;
+  }
+  document.getElementById("cards").innerHTML=html;
+  fields=v.fields; changes={}; dirty();
+}
+function dirty(){
+  const n=Object.keys(changes).length, b=document.getElementById("save");
+  b.disabled=!n; b.textContent=n?`Save ${n} change${n>1?"s":""}`:"Save changes";
+  const t=document.getElementById("test"); if(t) t.disabled=!!n;
+}
+document.addEventListener("input",e=>{
+  const el=e.target, id=el.dataset.id; if(!id) return;
+  const f=fields.find(f=>`${f.section}.${f.key}`===id);
+  let val=el.type==="checkbox"?el.checked:el.value;
+  if(el.type==="checkbox") el.nextElementSibling.textContent=val?"On":"Off";
+  const same=f.secret?val==="":String(val)===String(f.value);
+  if(same) delete changes[id]; else changes[id]=val;
+  el.classList.toggle("dirty",!same); dirty();
+});
+document.addEventListener("click",async e=>{
+  const clear=e.target.dataset.clear;
+  if(clear){changes[clear]={clear:true}; e.target.textContent="Will be removed when you save"; dirty(); return}
+  if(e.target.id==="save") return save();
+  if(e.target.id==="test"){
+    const m=document.getElementById("testmsg"); m.textContent="Sending…";
+    const r=await post("api/test-notify",{});
+    m.className="help "+(r.ok?"done":"failed"); m.textContent=r.message;
+  }
+});
+async function post(url,body){
+  try{return await (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json()}
+  catch(e){return {ok:false,message:"Couldn't reach JFRipper"}}
+}
+async function save(){
+  const msg=document.getElementById("msg"); msg.className="msg"; msg.textContent="Saving…";
+  const r=await post("api/settings",{changes});
+  msg.className="msg "+(r.ok?"done":"failed"); msg.textContent=r.message;
+  if(r.ok) load();
+}
+async function load(){render(await (await fetch("api/settings",{cache:"no-store"})).json())}
+load();
+</script></body></html>"""
+
+
+def test_notify():
+    from .notify import notify
+    results = notify("JFRipper test", "If you can read this, notifications work.")
+    if not results:
+        return {"ok": False, "message": "No notifications are set up yet."}
+    bad = [f"{name}: {err}" for name, err in results if err]
+    good = [name for name, err in results if not err]
+    msg = (f"Sent by {', '.join(good)}." if good else "") + (f" Failed - {'; '.join(bad)}" if bad else "")
+    return {"ok": not bad, "message": msg.strip()}
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, code, body, ctype):
         self.send_response(code)
@@ -272,26 +374,34 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, json.dumps(status()).encode(), "application/json")
         elif route in ("/", "/index.html"):
             self.send(200, PAGE.encode(), "text/html; charset=utf-8")
+        elif route == "/settings":
+            self.send(200, SETTINGS_PAGE.encode(), "text/html; charset=utf-8")
+        elif route == "/api/settings":
+            self.send(200, json.dumps(settings.view()).encode(), "application/json")
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if self.path.split("?")[0] != "/api/name":
+        route = self.path.split("?")[0]
+        actions = {"/api/name": lambda req: name_job(req),
+                   "/api/settings": lambda req: settings.save(req.get("changes")),
+                   "/api/test-notify": lambda req: test_notify()}
+        if route not in actions:
             self.send_error(404)
             return
         # JSON only: a browser won't send that cross-site without a CORS preflight, which
-        # this server never approves, so another web page can't file things behind your back.
-        if not conf().status["allow_naming"] or \
-                self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+        # this server never approves, so another web page can't act behind your back.
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json" or \
+                (route == "/api/name" and not conf().status["allow_naming"]):
             self.send_error(403)
             return
         try:
             length = min(int(self.headers.get("Content-Length") or 0), 65536)
             req = json.loads(self.rfile.read(length) or b"{}")
-            out = name_job(req if isinstance(req, dict) else {})
+            out = actions[route](req if isinstance(req, dict) else {})
         except Exception as exc:
-            log(f"status page: naming failed: {exc!r}")
-            out = naming.result(False, f"something went wrong: {exc}")
+            log(f"status page: {route} failed: {exc!r}")
+            out = {"ok": False, "message": f"something went wrong: {exc}"}
         self.send(200, json.dumps(out).encode(), "application/json")
 
     def log_message(self, *args):
