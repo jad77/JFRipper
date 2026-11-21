@@ -14,17 +14,19 @@ JFRipper is a small background service for Linux and macOS that turns a disc dri
 - **Audio CDs** → FLAC or MP3 (your choice), tagged from MusicBrainz, filed as
   `Music/Artist/Album/01 Track.flac`. On Linux via whipper (secure reads,
   AccurateRip-verified); on macOS with the built-in `afconvert`, nothing extra to install.
-- **A status page** at `http://your-server:8097` shows what's ripping, when it'll finish,
-  and lets you name anything it couldn't identify.
+- **A web dashboard** at `http://your-server:8097`: the **Status** tab shows what's ripping
+  and when it'll finish and lets you name anything it couldn't identify; the **Settings**
+  tab sets it up (a short Basics page, with everything else under Advanced).
 - **Notifications** when a disc is done, needs a name, or failed: ntfy, Discord/Slack or any
   webhook, email, or your own command.
 
 It ejects the disc as soon as the rip is done, so you can feed it the next one while the
 previous one converts.
 
-> **Beta.** JFRipper grew out of a home setup that has ripped a shelf of discs on Linux.
-> The macOS support is newer: the encoding, the status page and the CD conversion are
+> **Beta (0.2.0).** JFRipper grew out of a home setup that has ripped a shelf of discs on
+> Linux. The macOS support is newer: the encoding, the dashboard and the CD conversion are
 > tested on a Mac, but ripping from a real drive on a Mac isn't yet. Bug reports welcome.
+> What's new: [CHANGELOG.md](CHANGELOG.md).
 
 > Only rip discs you own, and check the law where you live. MakeMKV is separate,
 > closed-source software with its own license; JFRipper just drives it.
@@ -88,13 +90,34 @@ jfripper check
 
 ### Configure
 
+The easy way: start JFRipper (`jfripper run`, or the service below), open
+`http://your-server:8097/settings`, and fill in the **Basics** tab:
+
+- **Library folder:** your Jellyfin media folder.
+- **TMDB API key:** so discs get named automatically.
+- **CD format:** FLAC or MP3.
+- **Notifications:** ntfy, a webhook, or email, with a button to send a test.
+
+Everything else is on the **Advanced** tab. Each setting there is tagged *default* until you
+change it, and a changed one shows its default with a **Reset**. Changes take effect when you
+press Save, except the port, listen address and drive list, which are marked "after restart".
+
+Settings are saved to `~/.config/jfripper/config.toml` (owner-only, since it can hold your
+mail password; the previous version is kept as `config.toml.bak`). Saved passwords and keys
+are never sent back to the browser. The notification command and the program paths can only
+be changed in that file, so the web page can't be used to make the server run a program.
+
+Prefer a text file? Start from the commented example:
+
 ```sh
 mkdir -p ~/.config/jfripper
 jfripper config --example > ~/.config/jfripper/config.toml
 ```
 
-Edit at least `library.root` (your Jellyfin media folder) and `sorter.tmdb_api_key`. Every
-setting is documented in the file. The defaults put things here:
+> The dashboard has no login: anyone who can reach port 8097 can use it. That suits a home
+> network. To keep it to the server itself, set **Listen address** to `127.0.0.1`.
+
+The defaults put things here:
 
 ```
 /mnt/media/
@@ -136,7 +159,19 @@ launchctl load -w ~/Library/LaunchAgents/local.jfripper.plist
 In **System Settings → CDs & DVDs**, set "When you insert a video DVD" to *Ignore*, so DVD
 Player doesn't grab the disc.
 
+### Upgrading
+
+```sh
+pipx upgrade jfripper            # or: pipx install --force "git+https://github.com/jad77/JFRipper.git"
+sudo systemctl restart jfripper  # Linux
+launchctl kickstart -k gui/$(id -u)/local.jfripper   # macOS
+```
+
+Your settings and job history are kept. See [CHANGELOG.md](CHANGELOG.md) for what changed.
+
 ### FLAC or MP3 for CDs
+
+Pick it on the Settings page (**Basics → CD format**), or in the config file:
 
 ```toml
 [cd]
@@ -162,7 +197,8 @@ jfripper name cd 20261120-093000 --artist "Artist" --album "Album" --year 1999
 
 ## Notifications
 
-Set any of these in the `[notify]` section:
+Set them up on the Settings page and press **Send test notification**, or set any of these
+in the `[notify]` section:
 
 - `ntfy_url = "https://ntfy.sh/some-long-random-topic"`: push notifications via the ntfy app.
 - `webhook_url = "..."`: POSTs JSON with `title`, `message`, `text` (Slack) and `content`
@@ -174,7 +210,7 @@ Set any of these in the `[notify]` section:
 
 | | |
 |---|---|
-| `jfripper run` | the service: watch drives, rip, convert, sort, status page |
+| `jfripper run` | the service: watch drives, rip, convert, sort, web dashboard |
 | `jfripper rip [drive]` | rip, convert and file the disc in a drive right now |
 | `jfripper name ...` | name a rip that's waiting for one |
 | `jfripper jobs` | recent discs and their state |
@@ -198,6 +234,9 @@ Set any of these in the `[notify]` section:
 - **A scratched disc keeps failing.** Clean it from the centre outwards and reinsert; the
   retry ladder starts over. A disc whose outer edge is unreadable may just be too damaged
   for that drive.
+- **The Settings page says "Can't write …".** The user JFRipper runs as can't write its
+  config file (e.g. it's in `/etc/jfripper/` and owned by root). Move it to that user's
+  `~/.config/jfripper/config.toml`, or fix the file's owner.
 - **Logs:** `~/.local/state/jfripper/jfripper.log` (Linux), `~/Library/Application
   Support/JFRipper/jfripper.log` (macOS). Each rip folder also keeps MakeMKV's output.
 
