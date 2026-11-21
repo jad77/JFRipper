@@ -265,67 +265,108 @@ tick(); setInterval(tick,5000);
 SETTINGS_PAGE = HEAD + r"""
 .field{display:grid;gap:4px;padding:12px 0;border-top:1px solid var(--line)}
 .field:first-of-type{border-top:0}
-.field label{font-size:15px;font-weight:550}
+.field label{font-size:15px;font-weight:550;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .field .help{font-size:12.5px;color:var(--muted)}
 .field .ro{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);word-break:break-all}
-.flag{font-size:11px;font-weight:600;color:var(--warn);margin-left:6px}
+.flag{font-size:11px;font-weight:600;color:var(--warn)}
+.chip.def{font-size:11px;padding:1px 7px}
+.chip.chg{font-size:11px;padding:1px 7px;color:var(--accent);border-color:var(--accent)}
 select{font:inherit;font-size:15px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
 .toggle{display:flex;align-items:center;gap:10px}
 .toggle input{width:auto;transform:scale(1.25)}
-.clear{font-size:12.5px;color:var(--accent);background:none;padding:0;font-weight:500;justify-self:start}
+.link{font-size:12.5px;color:var(--accent);background:none;padding:0;font-weight:500;justify-self:start}
+.tabs{display:flex;gap:6px;margin:0 0 14px}
+.tabs button{background:var(--bar);color:var(--muted);font-weight:550;font-size:14px;padding:7px 14px;border-radius:99px}
+.tabs button.on{background:var(--ink);color:var(--card)}
+.intro{font-size:14px;color:var(--muted);margin:0 0 14px}
 .savebar{position:sticky;bottom:0;padding:12px 0 calc(12px + env(safe-area-inset-bottom,0px));background:var(--bg);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .secondary{background:var(--bar);color:var(--ink)}
 .dirty{outline:2px solid var(--accent);outline-offset:1px}
 </style></head><body><main>
 <nav><b>JFRipper</b><a href="./">Status</a><a href="settings" class="on">Settings</a></nav>
-<div id="where" class="path" style="margin:-8px 0 14px"></div>
-<div id="cards">Loading…</div>
+<div class="tabs"><button id="tab-basic" class="on">Basics</button><button id="tab-advanced">Advanced</button></div>
+<div id="pane-basic"><p class="intro">Most setups only need these. Everything else works out of the box.</p><div id="basic">Loading…</div></div>
+<div id="pane-advanced" hidden><p class="intro">Fine-tuning. The defaults suit most drives and libraries; anything you change is marked, with a Reset back to the default.</p><div id="advanced"></div></div>
 <div class="savebar"><button id="save" disabled>Save changes</button><span id="msg" class="msg" style="margin:0"></span></div>
+<div id="where" class="path"></div>
 <footer>Open to anyone on your network. The notification command and program paths can only be changed in the config file; saved passwords and keys are never shown.</footer>
 </main>
 <script>
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let fields=[], changes={};
+const fid=f=>`${f.section}.${f.key}`;
 function input(f){
-  const id=`${f.section}.${f.key}`;
+  const id=fid(f);
   if(f.readonly) return `<div class="ro">${esc(f.value)||"(not set)"}</div>`;
   if(f.kind==="bool") return `<div class="toggle"><input type="checkbox" data-id="${id}" ${f.value?"checked":""}><span class="help">${f.value?"On":"Off"}</span></div>`;
   if(f.kind==="choice") return `<select data-id="${id}">${f.choices.map(c=>`<option ${c===f.value?"selected":""}>${esc(c)}</option>`).join("")}</select>`;
   if(f.secret) return `<input type="password" data-id="${id}" autocomplete="new-password" placeholder="${f.is_set?"Saved - type to replace":"Not set"}">`+
-    (f.is_set?`<button type="button" class="clear" data-clear="${id}">Remove saved value</button>`:"");
+    (f.is_set?`<button type="button" class="link" data-clear="${id}">Remove saved value</button>`:"");
   return `<input type="${f.kind==="int"?"number":"text"}" data-id="${id}" value="${esc(f.value)}" autocomplete="off">`;
+}
+function field(f){
+  // Advanced settings say whether they're at their default; basics just say what it is.
+  let tag="", note=f.help||"";
+  if(!f.basic&&!f.readonly){
+    tag=f.is_default?`<span class="chip def">default</span>`:`<span class="chip chg">changed</span>`;
+    if(!f.is_default){
+      note+=(note?" ":"")+`Default: ${f.default}.`;
+      if(!f.secret) tag+=`<button type="button" class="link" data-reset="${fid(f)}">Reset</button>`;
+    }
+  }
+  return `<div class="field"><label>${esc(f.label)}${tag}${f.restart?'<span class="flag">after restart</span>':""}</label>${input(f)}
+    ${note?`<div class="help">${esc(note)}</div>`:""}</div>`;
+}
+function cards(v, basic){
+  const bySec={}; v.fields.filter(f=>f.basic===basic).forEach(f=>(bySec[f.section]=bySec[f.section]||[]).push(f));
+  let html="";
+  for(const [sec,title] of Object.entries(v.sections)){
+    if(!bySec[sec]) continue;
+    html+=`<div class="card"><div class="label">${esc(title)}</div>`+bySec[sec].map(field).join("");
+    if(basic&&sec==="notify") html+=`<div class="field"><button type="button" class="secondary" id="test">Send test notification</button><div class="help" id="testmsg">Uses the saved settings.</div></div>`;
+    html+=`</div>`;
+  }
+  return html;
 }
 function render(v){
   document.getElementById("where").textContent=(v.writable?"Saved to ":"Can't write ")+v.config_path;
-  const bySec={}; v.fields.forEach(f=>(bySec[f.section]=bySec[f.section]||[]).push(f));
-  let html="";
-  for(const [sec,title] of Object.entries(v.sections)){
-    html+=`<div class="card"><div class="label">${esc(title)}</div>`+bySec[sec].map(f=>`<div class="field">
-      <label>${esc(f.label)}${f.restart?'<span class="flag">after restart</span>':""}</label>${input(f)}
-      ${f.help?`<div class="help">${esc(f.help)}</div>`:""}</div>`).join("");
-    if(sec==="notify") html+=`<div class="field"><button type="button" class="secondary" id="test">Send test notification</button><div class="help" id="testmsg">Uses the saved settings.</div></div>`;
-    html+=`</div>`;
-  }
-  document.getElementById("cards").innerHTML=html;
+  document.getElementById("basic").innerHTML=cards(v,true);
+  document.getElementById("advanced").innerHTML=cards(v,false);
+  const n=v.fields.filter(f=>!f.basic&&!f.readonly&&!f.is_default).length;
+  document.getElementById("tab-advanced").textContent=n?`Advanced · ${n} changed`:"Advanced";
   fields=v.fields; changes={}; dirty();
+}
+function show(tab){
+  for(const t of ["basic","advanced"]){
+    document.getElementById("pane-"+t).hidden=t!==tab;
+    document.getElementById("tab-"+t).classList.toggle("on",t===tab);
+  }
+  history.replaceState(null,"",tab==="advanced"?"#advanced":location.pathname);
 }
 function dirty(){
   const n=Object.keys(changes).length, b=document.getElementById("save");
   b.disabled=!n; b.textContent=n?`Save ${n} change${n>1?"s":""}`:"Save changes";
   const t=document.getElementById("test"); if(t) t.disabled=!!n;
 }
-document.addEventListener("input",e=>{
-  const el=e.target, id=el.dataset.id; if(!id) return;
-  const f=fields.find(f=>`${f.section}.${f.key}`===id);
-  let val=el.type==="checkbox"?el.checked:el.value;
+function changed(el){
+  const id=el.dataset.id, f=fields.find(f=>fid(f)===id);
+  const val=el.type==="checkbox"?el.checked:el.value;
   if(el.type==="checkbox") el.nextElementSibling.textContent=val?"On":"Off";
   const same=f.secret?val==="":String(val)===String(f.value);
   if(same) delete changes[id]; else changes[id]=val;
   el.classList.toggle("dirty",!same); dirty();
-});
+}
+document.addEventListener("input",e=>{if(e.target.dataset.id) changed(e.target)});
 document.addEventListener("click",async e=>{
-  const clear=e.target.dataset.clear;
-  if(clear){changes[clear]={clear:true}; e.target.textContent="Will be removed when you save"; dirty(); return}
+  const d=e.target.dataset;
+  if(e.target.id==="tab-basic") return show("basic");
+  if(e.target.id==="tab-advanced") return show("advanced");
+  if(d.clear){changes[d.clear]={clear:true}; e.target.textContent="Will be removed when you save"; dirty(); return}
+  if(d.reset){
+    const f=fields.find(f=>fid(f)===d.reset), el=document.querySelector(`[data-id="${d.reset}"]`);
+    if(el.type==="checkbox") el.checked=!!f.default_value; else el.value=f.default_value;
+    changed(el); e.target.textContent="Will reset when you save"; return;
+  }
   if(e.target.id==="save") return save();
   if(e.target.id==="test"){
     const m=document.getElementById("testmsg"); m.textContent="Sending…";
@@ -344,6 +385,7 @@ async function save(){
   if(r.ok) load();
 }
 async function load(){render(await (await fetch("api/settings",{cache:"no-store"})).json())}
+if(location.hash==="#advanced") show("advanced");
 load();
 </script></body></html>"""
 

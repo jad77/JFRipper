@@ -71,6 +71,11 @@ FIELDS = [
     ("notify", "command", "Notification command", "Change in the config file.", (READONLY,)),
 ]
 
+# What a new user needs; everything else is on the Advanced tab with its default shown.
+BASICS = {("library", "root"), ("sorter", "tmdb_api_key"), ("cd", "format"),
+          ("notify", "ntfy_url"), ("notify", "webhook_url"), ("notify", "smtp_host"),
+          ("notify", "smtp_user"), ("notify", "smtp_password"), ("notify", "smtp_to")}
+
 SECTIONS = {"library": "Library", "rip": "Ripping", "encode": "Video", "cd": "Audio CDs",
             "sorter": "Naming", "status": "This page", "notify": "Notifications"}
 CHOICES = {("encode", "encoder"): ["auto", "qsv", "vaapi", "nvenc", "videotoolbox", "x264"],
@@ -86,15 +91,29 @@ def kind(section, key):
     return {bool: "bool", int: "int", list: "list"}.get(type(default), "text")
 
 
+def shown(value):
+    """A setting as words, for 'Default: ...'."""
+    if isinstance(value, bool):
+        return "On" if value else "Off"
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value) or "blank"
+    return str(value) if value != "" else "blank"
+
+
 def view():
     """Everything the page needs, with secrets reduced to 'is one saved?'."""
     c = config.conf()
     fields = []
     for section, key, label, help_text, flags in FIELDS:
         value = c.data[section][key]
+        default = config.DEFAULTS[section][key]
         f = {"section": section, "key": key, "label": label, "help": help_text,
              "kind": kind(section, key), "readonly": READONLY in flags,
-             "restart": RESTART in flags, "secret": SECRET in flags}
+             "restart": RESTART in flags, "secret": SECRET in flags,
+             "basic": (section, key) in BASICS, "is_default": value == default,
+             "default": "not set" if SECRET in flags else shown(default)}
+        if not f["secret"]:
+            f["default_value"] = ", ".join(str(v) for v in default) if f["kind"] == "list" else default
         if f["secret"]:
             f["is_set"] = bool(value)
         else:

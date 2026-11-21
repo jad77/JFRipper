@@ -508,6 +508,18 @@ class SettingsTests(TempLibrary):
         self.assertTrue(settings.save({"notify.smtp_password": {"clear": True}})["ok"])
         self.assertEqual(config.conf().notify["smtp_password"], "")
 
+    def test_basics_and_defaults(self):
+        from jfripper import settings
+        v = settings.view()
+        basic = {f["key"] for f in v["fields"] if f["basic"]}
+        self.assertEqual(basic, {"root", "tmdb_api_key", "format", "ntfy_url", "webhook_url",
+                                 "smtp_host", "smtp_user", "smtp_password", "smtp_to"})
+        q = next(f for f in v["fields"] if f["key"] == "quality")
+        self.assertEqual((q["is_default"], q["default"], q["default_value"]), (True, "21", 21))
+        self.assertTrue(settings.save({"encode.quality": "19"})["ok"])
+        q = next(f for f in settings.view()["fields"] if f["key"] == "quality")
+        self.assertEqual((q["is_default"], q["value"]), (False, 19))
+
     def test_refusals(self):
         from jfripper import settings
         for changes in ({"notify.command": "rm -rf /"}, {"encode.ffmpeg": "/tmp/evil"},
