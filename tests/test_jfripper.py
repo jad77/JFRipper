@@ -66,6 +66,12 @@ class ConfigTests(unittest.TestCase):
         finally:
             os.remove(f.name)
 
+    def test_bad_cd_format_is_refused(self):
+        data = copy.deepcopy(config.DEFAULTS)
+        data["cd"]["format"] = "mp4"
+        with self.assertRaises(ValueError):
+            config.Config(data)
+
     def test_example_config_matches_defaults(self):
         path = os.path.join(os.path.dirname(config.__file__), "config.example.toml")
         with open(path, "rb") as f:
@@ -357,6 +363,25 @@ class CDLogicTests(TempLibrary):
         self.assertEqual(album["tracks"][1], {"title": "Something", "artist": "The Beatles"})
 
 
+@unittest.skipUnless(HAVE_FFMPEG and HAVE_DEPS, "needs ffmpeg, guessit and mutagen")
+class Mp3ConversionTests(TempLibrary):
+    def test_flac_to_mp3_keeps_tags(self):
+        from jfripper import cd, encode
+        flac = os.path.join(self.root, "01.flac")
+        subprocess.run([encode.tool("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "sine=d=2",
+                        "-ac", "2", "-ar", "44100", flac], check=True)
+        t = cd.open_tags(flac)
+        t.update({"title": "Song", "artist": "Band", "albumartist": "Band", "album": "LP",
+                  "tracknumber": "1/9", "discnumber": "1/2", "date": "1999",
+                  "musicbrainz_albumid": "rel-9"})
+        t.save()
+        mp3 = cd.to_mp3(flac, os.path.join(self.root, "01"))
+        cd.copy_tags(flac, mp3)
+        got = cd.open_tags(mp3)
+        for key in cd.TAG_KEYS:
+            self.assertEqual(got[key][0], t[key][0], key)
+
+
 class FakeMacCD(FakeDrive):
     def __init__(self, mount):
         super().__init__()
@@ -409,6 +434,21 @@ class MacCDTests(TempLibrary):
         self.assertEqual((tags["album"][0], tags["tracknumber"][0], tags["date"][0]),
                          ("First Album", "2/3", "2001"))
         self.assertIn("is in Jellyfin", self.sent[-1][0])
+
+    def test_known_cd_as_mp3(self):
+        self.cfg.cd["format"] = "mp3"
+        self.cd.musicbrainz_lookup = lambda discid: {
+            "artist": "Some Band", "album": "First Album", "date": "2001", "album_id": "rel-1",
+            "disc": 1, "discs": 1,
+            "tracks": [{"title": t, "artist": "Some Band"} for t in ("One", "Two", "Three")]}
+        self.cd.rip_cd(FakeMacCD(self.mount))
+        album = os.path.join(self.cfg.music, "Some Band", "First Album")
+        self.assertEqual(sorted(os.listdir(album)), ["01 One.mp3", "02 Two.mp3", "03 Three.mp3"])
+        from mutagen import File as MutagenFile
+        f = MutagenFile(os.path.join(album, "03 Three.mp3"), easy=True)
+        self.assertEqual((f["title"][0], f["albumartist"][0], f["musicbrainz_albumid"][0]),
+                         ("Three", "Some Band", "rel-1"))
+        self.assertGreater(f.info.bitrate, 0)
 
     def test_unknown_cd_waits_then_names(self):
         from jfripper import jobs, naming

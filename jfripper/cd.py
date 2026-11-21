@@ -25,7 +25,9 @@ from .config import IS_MAC, conf
 from .notify import notify
 from .util import log, under
 
-AUDIO_EXT = (".flac", ".m4a")
+AUDIO_EXT = (".flac", ".m4a", ".mp3")
+TAG_KEYS = ("title", "artist", "albumartist", "album", "tracknumber", "discnumber", "date",
+            "musicbrainz_albumid")
 MB_API = "https://musicbrainz.org/ws/2"
 MB_AGENT = f"JFRipper/{__version__} ( https://github.com/jad77/JFRipper )"
 
@@ -83,6 +85,44 @@ def file_cd(stamp, work, files, label, known, check):
         notify(f"Ripped {label}, some tracks need a look",
                f"{len(review)} of {tracks} tracks didn't file cleanly (often a second "
                f"disc with the same track names). See\n{where}\n\n{check}")
+
+
+# ---------------------------------------------------------------- output format
+
+def wants_mp3():
+    return str(conf().cd["format"]).lower() == "mp3"  # checked when the config loads
+
+
+def to_mp3(src, dest_stem):
+    """Any audio file -> MP3 with ffmpeg's LAME encoder (VBR; cd.mp3_quality 0 = best).
+    Embedded cover art is carried over. Returns the new file's path."""
+    from .encode import tool
+    out = dest_stem + ".mp3"
+    res = subprocess.run([tool("ffmpeg"), "-hide_banner", "-nostdin", "-v", "error", "-y",
+                          "-i", src, "-map", "0:a", "-map", "0:v?", "-c:a", "libmp3lame",
+                          "-q:a", str(int(conf().cd["mp3_quality"])), "-c:v", "copy",
+                          "-id3v2_version", "3", "-map_metadata", "-1", out],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        raise OSError(res.stderr.strip()[-500:] or f"ffmpeg exit {res.returncode}")
+    return out
+
+
+def open_tags(path):
+    """Easy (plain key) tags for FLAC / M4A / MP3, adding an empty tag block if there's none."""
+    from mutagen import File as MutagenFile
+    tags = MutagenFile(path, easy=True)
+    if tags.tags is None:
+        tags.add_tags()
+    return tags
+
+
+def copy_tags(src, dest):
+    old, new = open_tags(src), open_tags(dest)
+    for key in TAG_KEYS:
+        if old.get(key):
+            new[key] = old[key]
+    new.save()
 
 
 # ---------------------------------------------------------------- MusicBrainz
@@ -176,8 +216,7 @@ def afconvert(src, dest_stem):
 
 
 def tag(path, n, total, album):
-    from mutagen import File as MutagenFile
-    tags = MutagenFile(path, easy=True)
+    tags = open_tags(path)
     tags["tracknumber"] = f"{n}/{total}"
     if album:
         info = album["tracks"][n - 1] if n <= len(album["tracks"]) else {}
@@ -208,9 +247,10 @@ def rip_cd_mac(drive):
     work = os.path.join(conf().work, f"{stamp}-cd")
     os.makedirs(work)
     progress = os.path.join(work, "progress.txt")
+    mp3 = wants_mp3()
     jobs.update(stamp, label=label, name=label, started=time.time(), stage="ripping", work=work,
                 progress_file=progress, media="Audio CD", duration=secs or None,
-                out_codec="FLAC" if afconvert_flac() else "Apple Lossless")
+                out_codec="MP3" if mp3 else "FLAC" if afconvert_flac() else "Apple Lossless")
     if not sources:
         drive.eject()
         failed(stamp, work, label, "no tracks", "macOS didn't show any audio tracks on the disc.")
@@ -221,11 +261,12 @@ def rip_cd_mac(drive):
         for n, src in enumerate(sources, 1):
             with open(progress, "a") as p:
                 p.write(f"PRGV:0,{n - 1},{len(sources)}\n")
-            files.append(afconvert(src, os.path.join(work, f"{n:02d}")))
+            convert = to_mp3 if mp3 else afconvert
+            files.append(convert(src, os.path.join(work, f"{n:02d}")))
     except OSError as exc:
         drive.eject()
         failed(stamp, work, label, f"track {len(files) + 1}: {exc}",
-               f"afconvert said, on track {len(files) + 1}:\n\n{exc}")
+               f"{'ffmpeg' if mp3 else 'afconvert'} said, on track {len(files) + 1}:\n\n{exc}")
         return
     drive.eject()
     for n, f in enumerate(files, 1):
@@ -297,8 +338,9 @@ def rip_cd_whipper(drive):
     work = os.path.join(conf().work, f"{stamp}-cd")
     os.makedirs(work)
     progress = os.path.join(work, "progress.txt")
+    mp3 = wants_mp3()
     jobs.update(stamp, label=label, name=label, started=time.time(), stage="ripping", work=work,
-                progress_file=progress, media="Audio CD", out_codec="FLAC")
+                progress_file=progress, media="Audio CD", out_codec="MP3" if mp3 else "FLAC")
     ok_offset = calibrate(dev)
     log(f"{dev}: ripping audio CD '{label}' ({tracks or '?'} tracks, {secs // 60} min) -> {work}")
 
@@ -338,6 +380,16 @@ def rip_cd_whipper(drive):
     if not ok_offset:
         ar += " (drive offset not calibrated yet)"
 
-    from mutagen import File as MutagenFile
-    tags = MutagenFile(flacs[0], easy=True) or {}
-    file_cd(stamp, work, flacs, label, bool(tags.get("musicbrainz_albumid")), f"AccurateRip: {ar}")
+    known = bool(open_tags(flacs[0]).get("musicbrainz_albumid"))
+    files = flacs
+    if mp3:  # whipper only writes FLAC; convert the verified rip, tags and cover art included
+        try:
+            files = []
+            for f in flacs:
+                files.append(to_mp3(f, os.path.splitext(f)[0]))
+                copy_tags(f, files[-1])
+                os.remove(f)
+        except OSError as exc:
+            failed(stamp, work, label, f"MP3 conversion: {exc}", f"ffmpeg said:\n\n{exc}")
+            return
+    file_cd(stamp, work, files, label, known, f"AccurateRip: {ar}")

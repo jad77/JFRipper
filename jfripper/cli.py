@@ -111,6 +111,11 @@ def cmd_check(args):
         enc = encode.encoder()
         check_line(encode.encoder_works(enc), "video encoder", encode.ENCODER_NAMES[enc]
                    + (" (no hardware encoder found; works, just slower)" if enc == "x264" else ""))
+    if str(c.cd["format"]).lower() == "mp3":
+        lame = "libmp3lame" in subprocess.run([encode.tool("ffmpeg"), "-hide_banner", "-encoders"],
+                                              capture_output=True, text=True).stdout
+        check_line(lame, "MP3 encoder (cd.format = mp3)", "ffmpeg has LAME" if lame else
+                   "this ffmpeg has no libmp3lame; CDs will fail")
     if config.IS_LINUX:
         check_line(bool(shutil.which("whipper")), "whipper (audio CDs)",
                    shutil.which("whipper") or "not installed; audio CDs will fail")

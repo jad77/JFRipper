@@ -35,6 +35,10 @@ ffmpeg = ""                   # empty = jellyfin-ffmpeg if installed, else ffmpe
 ffprobe = ""
 render_device = "/dev/dri/renderD128"   # Linux Quick Sync / VA-API
 
+[cd]
+format = "flac"               # "flac" (lossless, AccurateRip-checked on Linux) or "mp3"
+mp3_quality = 0               # MP3 VBR level: 0 = best (~245 kbps), 2 = ~190 kbps, 4 = ~165 kbps
+
 [sorter]
 tmdb_api_key = ""             # free at themoviedb.org; or set $TMDB_API_KEY. Strongly recommended.
 interval_seconds = 60

@@ -11,9 +11,9 @@ JFRipper is a small background service for Linux and macOS that turns a disc dri
 - **TV season discs** → every episode is ripped and converted, then waits for you to say
   which show, season and starting episode it is (a disc can't tell you), and is filed as
   `TV/Show (Year)/Season 01/Show S01E05.mkv`.
-- **Audio CDs** → FLAC, tagged from MusicBrainz, filed as `Music/Artist/Album/01 Track.flac`.
-  On Linux via whipper (secure reads, AccurateRip-verified); on macOS with the built-in
-  `afconvert`, nothing extra to install.
+- **Audio CDs** → FLAC or MP3 (your choice), tagged from MusicBrainz, filed as
+  `Music/Artist/Album/01 Track.flac`. On Linux via whipper (secure reads,
+  AccurateRip-verified); on macOS with the built-in `afconvert`, nothing extra to install.
 - **A status page** at `http://your-server:8097` shows what's ripping, when it'll finish,
   and lets you name anything it couldn't identify.
 - **Notifications** when a disc is done, needs a name, or failed: ntfy, Discord/Slack or any
@@ -135,6 +135,18 @@ launchctl load -w ~/Library/LaunchAgents/local.jfripper.plist
 
 In **System Settings → CDs & DVDs**, set "When you insert a video DVD" to *Ignore*, so DVD
 Player doesn't grab the disc.
+
+### FLAC or MP3 for CDs
+
+```toml
+[cd]
+format = "mp3"      # default "flac"
+mp3_quality = 0     # LAME VBR: 0 = best (~245 kbps), 2 = ~190 kbps, 4 = ~165 kbps
+```
+
+FLAC is lossless and the safe archive choice; MP3 is smaller and plays on anything. MP3s
+are made with ffmpeg's LAME encoder (macOS has no MP3 encoder of its own). On Linux the
+disc is still read and AccurateRip-checked by whipper first, then converted.
 
 ## Naming a disc it couldn't identify
 

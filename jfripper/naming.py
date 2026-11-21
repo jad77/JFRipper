@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 
 from . import jobs, sorter
-from .cd import AUDIO_EXT
+from .cd import AUDIO_EXT, open_tags
 from .config import conf
 from .util import log, sanitize, under
 
@@ -76,7 +76,6 @@ def movie(stamp, title, year):
 
 @guarded
 def cd(stamp, artist, album, year="", tracks=None):
-    from mutagen import File as MutagenFile
     job, src = waiting_job(stamp, want_dir=True)
     if job.get("kind") == "tv":
         raise Refused("that rip is a TV disc, not a CD")
@@ -91,7 +90,7 @@ def cd(stamp, artist, album, year="", tracks=None):
     if names and len(names) != len(flacs):
         raise Refused(f"you gave {len(names)} track names but the disc has {len(flacs)} tracks")
     for i, f in enumerate(flacs, 1):
-        tags = MutagenFile(f, easy=True)
+        tags = open_tags(f)
         tags["artist"] = tags["albumartist"] = artist
         tags["album"] = album
         tags["tracknumber"] = f"{i}/{len(flacs)}"

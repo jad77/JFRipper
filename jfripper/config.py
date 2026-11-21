@@ -44,6 +44,10 @@ DEFAULTS = {
         "ffprobe": "",
         "render_device": "/dev/dri/renderD128",  # Linux QSV / VA-API
     },
+    "cd": {
+        "format": "flac",           # flac (lossless) | mp3
+        "mp3_quality": 0,           # LAME VBR level: 0 = best (~245 kbps), 2 = ~190 kbps, 4 = ~165 kbps
+    },
     "sorter": {
         "tmdb_api_key": "",         # or $TMDB_API_KEY
         "interval_seconds": 60,
@@ -117,6 +121,9 @@ class Config:
         self.incoming, self.review, self.work = sub("incoming"), sub("review"), sub("work")
         self.rip = data["rip"]
         self.encode = data["encode"]
+        self.cd = data["cd"]
+        if str(self.cd["format"]).lower() not in ("flac", "mp3"):
+            raise ValueError(f'cd.format must be "flac" or "mp3", not {self.cd["format"]!r}')
         self.sorter = data["sorter"]
         self.status = data["status"]
         self.notify = data["notify"]
