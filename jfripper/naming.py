@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from . import jobs, sorter
+from .cd import AUDIO_EXT
 from .config import conf
 from .util import log, sanitize, under
 
@@ -84,9 +85,9 @@ def cd(stamp, artist, album, year="", tracks=None):
         raise Refused("I need both the artist and the album")
     year = str(year or "").strip()
     names = [str(t).strip() for t in tracks or []]
-    flacs = sorted(os.path.join(src, f) for f in os.listdir(src) if f.endswith(".flac"))
+    flacs = sorted(os.path.join(src, f) for f in os.listdir(src) if f.endswith(AUDIO_EXT))
     if not flacs:
-        raise Refused(f"no FLAC files in {src}")
+        raise Refused(f"no audio files in {src}")
     if names and len(names) != len(flacs):
         raise Refused(f"you gave {len(names)} track names but the disc has {len(flacs)} tracks")
     for i, f in enumerate(flacs, 1):
@@ -104,7 +105,7 @@ def cd(stamp, artist, album, year="", tracks=None):
     log(f"name: audio CD {stamp} tagged as {artist} - {album}")
     landed = [str(sorter.handle_music(Path(f))) for f in flacs]
     review = [p for p in landed if not under(p, conf().music)]
-    if os.path.isdir(src) and not any(f.endswith(".flac") for _, _, fs in os.walk(src) for f in fs):
+    if os.path.isdir(src) and not any(f.endswith(AUDIO_EXT) for _, _, fs in os.walk(src) for f in fs):
         shutil.rmtree(src)  # only cover art / logs left behind
     if not review:
         album_dir = os.path.dirname(landed[0])

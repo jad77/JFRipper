@@ -1,20 +1,240 @@
-"""Audio CD -> AccurateRip-checked FLAC, tagged from MusicBrainz, filed under Music/ (Linux).
+"""Audio CD -> FLAC, tagged from MusicBrainz, filed under Music/.
 
-Uses whipper. Discs MusicBrainz doesn't know wait in the review folder as
-"Unknown CD <stamp>/" until you name them.
+Linux: whipper (secure reads, AccurateRip-checked).
+macOS: the system mounts an audio CD as a folder of AIFF files; each is converted with the
+built-in afconvert, and the album is looked up on MusicBrainz from the disc's table of
+contents (the hidden .TOC.plist on the mounted CD). No AccurateRip check on macOS.
+
+Discs MusicBrainz doesn't know wait in the review folder as "Unknown CD <stamp>/" until you
+name them.
 """
+import base64
+import hashlib
+import json
 import os
+import plistlib
 import re
 import shutil
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 
-from . import jobs, sorter
-from .config import conf
+from . import __version__, jobs, sorter
+from .config import IS_MAC, conf
 from .notify import notify
 from .util import log, under
 
+AUDIO_EXT = (".flac", ".m4a")
+MB_API = "https://musicbrainz.org/ws/2"
+MB_AGENT = f"JFRipper/{__version__} ( https://github.com/jad77/JFRipper )"
+
+
+def rip_cd(drive):
+    if IS_MAC:
+        rip_cd_mac(drive)
+    else:
+        rip_cd_whipper(drive)
+
+
+def failed(stamp, work, label, why, detail):
+    log(f"rip of audio CD '{label}' failed: {why}")
+    notify(f"CD rip failed: {label}",
+           "A track couldn't be read cleanly. Wipe the disc center-to-edge with a soft cloth "
+           "and put it back in; it will start again on its own.\n\n" + detail)
+    jobs.update(stamp, stage="failed", finished=time.time(),
+                message="Couldn't read a track - clean and reinsert")
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def file_cd(stamp, work, files, label, known, check):
+    """File ripped tracks: into Music/ if MusicBrainz knew the disc, else into review.
+    check = the line about rip verification for the notification."""
+    tracks = len(files)
+    jobs.update(stamp, stage="filing")
+    if not known:
+        dest = os.path.join(conf().review, f"Unknown CD {stamp}")
+        os.makedirs(dest)
+        for f in files:
+            shutil.move(f, os.path.join(dest, os.path.basename(f)))
+        shutil.rmtree(work)
+        log(f"audio CD not in MusicBrainz; {tracks} tracks waiting at {dest}")
+        jobs.update(stamp, stage="needs_name", finished=time.time(), path=dest)
+        notify("Ripped a CD, needs a name",
+               f"MusicBrainz didn't know this disc, so its {tracks} tracks are waiting at\n{dest}\n\n"
+               "Name it on the status page, or run:\n"
+               f'  jfripper name cd {stamp} --artist "Artist" --album "Album"\n\n{check}')
+        return
+
+    landed = [str(sorter.handle_music(Path(f))) for f in files]
+    shutil.rmtree(work)
+    review = [p for p in landed if not under(p, conf().music)]
+    album = os.path.dirname(landed[0])
+    if not review:
+        log(f"audio CD '{label}' filed in {album} ({check})")
+        jobs.update(stamp, stage="done", finished=time.time(), title=label, path=album)
+        notify(f"{label} is in Jellyfin",
+               f"Ripped {tracks} tracks and filed them in\n{album}\n\n{check}")
+    else:
+        where = os.path.dirname(review[0])
+        log(f"audio CD '{label}': {len(review)} tracks went to review ({where})")
+        jobs.update(stamp, stage="failed", finished=time.time(), path=where,
+                    message="Some tracks need a look")
+        notify(f"Ripped {label}, some tracks need a look",
+               f"{len(review)} of {tracks} tracks didn't file cleanly (often a second "
+               f"disc with the same track names). See\n{where}\n\n{check}")
+
+
+# ---------------------------------------------------------------- MusicBrainz
+
+def disc_id(first, last, leadout, offsets):
+    """MusicBrainz disc id from a table of contents (offsets in sectors, including the
+    150-sector lead-in)."""
+    data = f"{first:02X}{last:02X}{leadout:08X}"
+    data += "".join(f"{(offsets[i] if i < len(offsets) else 0):08X}" for i in range(99))
+    digest = base64.b64encode(hashlib.sha1(data.encode("ascii")).digest()).decode("ascii")
+    return digest.replace("+", ".").replace("/", "_").replace("=", "-")
+
+
+def credit(artist_credit):
+    return "".join(a["name"] + a.get("joinphrase", "") for a in artist_credit or [])
+
+
+def musicbrainz_lookup(discid):
+    """The disc's album from MusicBrainz, or None if it isn't known (or there's no network):
+    {"artist", "album", "date", "album_id", "disc", "discs", "tracks": [{"title", "artist"}]}"""
+    url = f"{MB_API}/discid/{discid}?inc=artist-credits+recordings&fmt=json"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": MB_AGENT})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.load(r)
+    except Exception as exc:  # 404 = not in MusicBrainz
+        log(f"MusicBrainz lookup of {discid}: {exc}")
+        return None
+    for rel in data.get("releases") or []:
+        for medium in rel.get("media") or []:
+            if any(d.get("id") == discid for d in medium.get("discs") or []):
+                album_artist = credit(rel.get("artist-credit"))
+                return {"artist": album_artist, "album": rel.get("title") or "",
+                        "date": (rel.get("date") or "")[:4], "album_id": rel.get("id"),
+                        "disc": medium.get("position") or 1, "discs": len(rel["media"]),
+                        "tracks": [{"title": t.get("title") or "",
+                                    "artist": credit(t.get("artist-credit")) or album_artist}
+                                   for t in medium.get("tracks") or []]}
+    return None
+
+
+# ---------------------------------------------------------------- macOS
+
+def read_toc(path):
+    """A mounted audio CD's .TOC.plist -> (first, last, leadout, offsets) for the audio tracks.
+    An enhanced CD's data track is left out, with the lead-out moved back the way MusicBrainz
+    expects (data track start - 11400)."""
+    with open(path, "rb") as f:
+        toc = plistlib.load(f)
+    session = toc["Sessions"][0]
+    tracks = [t for t in session["Track Array"] if not t.get("Data")]
+    starts = [int(t["Start Block"]) for t in tracks]
+    leadout = int(session["Leadout Block"])
+    data = [int(t["Start Block"]) for s in toc["Sessions"] for t in s["Track Array"] if t.get("Data")]
+    if data:
+        leadout = data[0] - 11400
+    # Disc ids count the 150-sector lead-in; add it if this TOC starts track 1 at zero.
+    lead_in = 150 if starts and starts[0] < 150 else 0
+    numbers = [int(t["Point"]) for t in tracks]
+    return min(numbers), max(numbers), leadout + lead_in, [s + lead_in for s in starts]
+
+
+def track_files(mount):
+    """The CD's AIFF tracks in disc order ("1 Track 1.aiff", "2 Song Name.aiff", ...)."""
+    files = [f for f in os.listdir(mount) if f.lower().endswith((".aiff", ".aif"))]
+    number = lambda f: int(re.match(r"\d+", f).group(0)) if re.match(r"\d+", f) else 999
+    return [os.path.join(mount, f) for f in sorted(files, key=number)]
+
+
+_flac_ok = None
+
+
+def afconvert_flac():
+    """Can this macOS's afconvert write FLAC? (Newer ones can; older ones get Apple Lossless.)"""
+    global _flac_ok
+    if _flac_ok is None:
+        out = subprocess.run(["afconvert", "-hf"], capture_output=True, text=True)
+        _flac_ok = "'flac' = FLAC" in out.stdout + out.stderr
+    return _flac_ok
+
+
+def afconvert(src, dest_stem):
+    """AIFF -> FLAC (or Apple Lossless). Returns the new file's path."""
+    fmt, codec, ext = ("flac", "flac", ".flac") if afconvert_flac() else ("m4af", "alac", ".m4a")
+    out = dest_stem + ext
+    res = subprocess.run(["afconvert", "-f", fmt, "-d", codec, src, out],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        raise OSError(res.stderr.strip() or res.stdout.strip() or f"afconvert exit {res.returncode}")
+    return out
+
+
+def tag(path, n, total, album):
+    from mutagen import File as MutagenFile
+    tags = MutagenFile(path, easy=True)
+    tags["tracknumber"] = f"{n}/{total}"
+    if album:
+        info = album["tracks"][n - 1] if n <= len(album["tracks"]) else {}
+        tags["title"] = info.get("title") or f"Track {n:02d}"
+        tags["artist"] = info.get("artist") or album["artist"]
+        tags["albumartist"] = album["artist"]
+        tags["album"] = album["album"]
+        tags["discnumber"] = f"{album['disc']}/{album['discs']}"
+        if album["date"]:
+            tags["date"] = album["date"]
+        tags["musicbrainz_albumid"] = album["album_id"]
+    else:
+        tags["title"] = f"Track {n:02d}"
+    tags.save()
+
+
+def rip_cd_mac(drive):
+    stamp = jobs.new_stamp()
+    mount = drive.mount_point()
+    toc = os.path.join(mount, ".TOC.plist") if mount else ""
+    album, secs = None, 0
+    if toc and os.path.exists(toc):
+        first, last, leadout, offsets = read_toc(toc)
+        secs = (leadout - offsets[0]) // 75
+        album = musicbrainz_lookup(disc_id(first, last, leadout, offsets))
+    label = f"{album['artist']} - {album['album']}" if album else "Unknown CD"
+    sources = track_files(mount) if mount else []
+    work = os.path.join(conf().work, f"{stamp}-cd")
+    os.makedirs(work)
+    progress = os.path.join(work, "progress.txt")
+    jobs.update(stamp, label=label, name=label, started=time.time(), stage="ripping", work=work,
+                progress_file=progress, media="Audio CD", duration=secs or None,
+                out_codec="FLAC" if afconvert_flac() else "Apple Lossless")
+    if not sources:
+        drive.eject()
+        failed(stamp, work, label, "no tracks", "macOS didn't show any audio tracks on the disc.")
+        return
+    log(f"{drive}: ripping audio CD '{label}' ({len(sources)} tracks, {secs // 60} min) -> {work}")
+    files = []
+    try:
+        for n, src in enumerate(sources, 1):
+            with open(progress, "a") as p:
+                p.write(f"PRGV:0,{n - 1},{len(sources)}\n")
+            files.append(afconvert(src, os.path.join(work, f"{n:02d}")))
+    except OSError as exc:
+        drive.eject()
+        failed(stamp, work, label, f"track {len(files) + 1}: {exc}",
+               f"afconvert said, on track {len(files) + 1}:\n\n{exc}")
+        return
+    drive.eject()
+    for n, f in enumerate(files, 1):
+        tag(f, n, len(files), album)
+    file_cd(stamp, work, files, label, bool(album),
+            "Read with macOS's own CD reader (no AccurateRip check on macOS).")
+
+
+# ---------------------------------------------------------------- Linux (whipper)
 
 def whipper_conf():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
@@ -36,19 +256,12 @@ def read_disc_id(dev):
 def lookup_cd(dev):
     """(tracks or None, seconds, "Artist - Album" or None) from the disc's TOC and MusicBrainz."""
     try:
-        disc_id, tracks, secs = read_disc_id(dev)
+        discid, tracks, secs = read_disc_id(dev)
     except Exception as exc:  # module not installed, or the TOC couldn't be read
         log(f"{dev}: disc lookup skipped ({exc!r}); whipper will still tag it if it can")
         return None, 0, None
-    try:
-        import musicbrainzngs
-        from . import __version__
-        musicbrainzngs.set_useragent("JFRipper", __version__)
-        res = musicbrainzngs.get_releases_by_discid(disc_id, includes=["artists"])
-        rel = res["disc"]["release-list"][0]
-        return tracks, secs, f"{rel['artist-credit-phrase']} - {rel['title']}"
-    except Exception:  # not in MusicBrainz (404), only a CD stub, no network, or not installed
-        return tracks, secs, None
+    album = musicbrainz_lookup(discid)
+    return tracks, secs, f"{album['artist']} - {album['album']}" if album else None
 
 
 def calibrated():
@@ -76,7 +289,7 @@ def calibrate(dev):
     return False
 
 
-def rip_cd(drive):
+def rip_cd_whipper(drive):
     dev = drive.path
     stamp = jobs.new_stamp()
     tracks, secs, name = lookup_cd(dev)
@@ -109,14 +322,8 @@ def rip_cd(drive):
     if rc != 0 or not flacs or len(flacs) < tracks:
         with open(os.path.join(work, "whipper.out")) as f:
             tail = f.read().strip().splitlines()[-5:]
-        log(f"{dev}: rip of audio CD '{label}' failed (whipper exit {rc}, {len(flacs)}/{tracks} tracks)")
-        notify(f"CD rip failed: {label}",
-               "A track couldn't be read cleanly. Wipe the disc center-to-edge with a soft cloth "
-               "and put it back in; it will start again on its own.\n\nwhipper said:\n\n"
-               + "\n".join(tail))
-        jobs.update(stamp, stage="failed", finished=time.time(),
-                    message="Couldn't read a track - clean and reinsert")
-        shutil.rmtree(work, ignore_errors=True)
+        failed(stamp, work, label, f"whipper exit {rc}, {len(flacs)}/{tracks} tracks",
+               "whipper said:\n\n" + "\n".join(tail))
         return
 
     os.makedirs(conf().cd_logs, exist_ok=True)
@@ -133,38 +340,4 @@ def rip_cd(drive):
 
     from mutagen import File as MutagenFile
     tags = MutagenFile(flacs[0], easy=True) or {}
-    known = bool(tags.get("musicbrainz_albumid"))
-    jobs.update(stamp, stage="filing")
-
-    if not known:
-        dest = os.path.join(conf().review, f"Unknown CD {stamp}")
-        os.makedirs(dest)
-        for f in flacs:
-            shutil.move(f, os.path.join(dest, os.path.basename(f)))
-        shutil.rmtree(work)
-        log(f"audio CD not in MusicBrainz; {tracks} tracks waiting at {dest}")
-        jobs.update(stamp, stage="needs_name", finished=time.time(), path=dest)
-        notify("Ripped a CD, needs a name",
-               f"MusicBrainz didn't know this disc, so its {tracks} tracks are waiting at\n{dest}\n\n"
-               "Name it on the status page, or run:\n"
-               f'  jfripper name cd {stamp} --artist "Artist" --album "Album"\n\n'
-               f"AccurateRip: {ar}")
-        return
-
-    landed = [str(sorter.handle_music(Path(f))) for f in flacs]
-    shutil.rmtree(work)
-    review = [p for p in landed if not under(p, conf().music)]
-    album = os.path.dirname(landed[0])
-    if not review:
-        log(f"audio CD '{label}' filed in {album} (AccurateRip: {ar})")
-        jobs.update(stamp, stage="done", finished=time.time(), title=label, path=album)
-        notify(f"{label} is in Jellyfin",
-               f"Ripped {tracks} tracks to FLAC and filed them in\n{album}\n\nAccurateRip: {ar}")
-    else:
-        where = os.path.dirname(review[0])
-        log(f"audio CD '{label}': {len(review)} tracks went to review ({where})")
-        jobs.update(stamp, stage="failed", finished=time.time(), path=where,
-                    message="Some tracks need a look")
-        notify(f"Ripped {label}, some tracks need a look",
-               f"{len(review)} of {tracks} tracks didn't file cleanly (often a second "
-               f"disc with the same track names). See\n{where}\n\nAccurateRip: {ar}")
+    file_cd(stamp, work, flacs, label, bool(tags.get("musicbrainz_albumid")), f"AccurateRip: {ar}")

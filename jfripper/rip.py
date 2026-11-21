@@ -113,9 +113,8 @@ def rip(drive):
         time.sleep(5)  # let the drive settle after the media change
         if drive.is_audio_cd():
             if not drive.audio_cd_supported:
-                log(f"{drive}: audio CD, but CD ripping needs whipper (Linux only); ejecting")
-                notify("Audio CD not supported here",
-                       "JFRipper rips audio CDs with whipper, which only runs on Linux.")
+                log(f"{drive}: audio CD, but this drive can't rip CDs; ejecting")
+                notify("Audio CD not supported here", "This drive can't rip audio CDs.")
                 drive.eject()
                 return None
             cd.rip_cd(drive)

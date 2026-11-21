@@ -3,6 +3,7 @@ import glob
 import os
 import re
 import subprocess
+import time
 
 from .config import IS_LINUX, IS_MAC, conf
 from .util import log
@@ -85,8 +86,7 @@ class LinuxDrive:
 
 
 class MacDrive:
-    # whipper (the CD ripper) is Linux-only.
-    audio_cd_supported = False
+    audio_cd_supported = True
 
     def __init__(self, index, product=""):
         self.index = int(index)
@@ -106,7 +106,24 @@ class MacDrive:
         return bool(self._status()[1])
 
     def is_audio_cd(self):
-        return self._status()[0].upper().startswith("CD")
+        """A CD that macOS mounted as an audio CD (a data CD goes down the video path and is
+        turned away there, as on Linux)."""
+        return self._status()[0].upper().startswith("CD") and bool(self.mount_point())
+
+    def mount_point(self, wait=20):
+        """Where macOS mounted the audio CD (its tracks appear as AIFF files), or ''. The
+        mount can lag the insert by a few seconds."""
+        disk = self._status()[1]
+        deadline = time.time() + wait
+        while disk:
+            mount = subprocess.run(["mount"], capture_output=True, text=True).stdout
+            m = re.search(rf"^{re.escape(disk)}(?:s\d+)? on (.+) \(cddafs", mount, re.M)
+            if m:
+                return m.group(1)
+            if time.time() > deadline:
+                break
+            time.sleep(2)
+        return ""
 
     def media_kind(self):
         kind = self._status()[0].upper()

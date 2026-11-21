@@ -11,8 +11,9 @@ JFRipper is a small background service for Linux and macOS that turns a disc dri
 - **TV season discs** → every episode is ripped and converted, then waits for you to say
   which show, season and starting episode it is (a disc can't tell you), and is filed as
   `TV/Show (Year)/Season 01/Show S01E05.mkv`.
-- **Audio CDs** (Linux) → AccurateRip-verified FLAC via whipper, tagged from MusicBrainz,
-  filed as `Music/Artist/Album/01 Track.flac`.
+- **Audio CDs** → FLAC, tagged from MusicBrainz, filed as `Music/Artist/Album/01 Track.flac`.
+  On Linux via whipper (secure reads, AccurateRip-verified); on macOS with the built-in
+  `afconvert`, nothing extra to install.
 - **A status page** at `http://your-server:8097` shows what's ripping, when it'll finish,
   and lets you name anything it couldn't identify.
 - **Notifications** when a disc is done, needs a name, or failed: ntfy, Discord/Slack or any
@@ -22,8 +23,8 @@ It ejects the disc as soon as the rip is done, so you can feed it the next one w
 previous one converts.
 
 > **Beta.** JFRipper grew out of a home setup that has ripped a shelf of discs on Linux.
-> The macOS support is newer: the encoding and the status page are tested on a Mac,
-> but disc detection on a real Mac drive isn't yet. Bug reports welcome.
+> The macOS support is newer: the encoding, the status page and the CD conversion are
+> tested on a Mac, but ripping from a real drive on a Mac isn't yet. Bug reports welcome.
 
 > Only rip discs you own, and check the law where you live. MakeMKV is separate,
 > closed-source software with its own license; JFRipper just drives it.
@@ -63,7 +64,7 @@ previous one converts.
 | Python | 3.9+ | 3.9+ (Homebrew `python` recommended) |
 | [MakeMKV](https://www.makemkv.com/) | `makemkvcon` ([build guide](https://forum.makemkv.com/forum/viewtopic.php?f=3&t=224)) | the normal app in /Applications |
 | ffmpeg | `ffmpeg` package, or Jellyfin's `jellyfin-ffmpeg` (used automatically if installed) | `brew install ffmpeg` |
-| Audio CDs | `whipper` (optional) | not supported yet |
+| Audio CDs | `whipper` (optional) | built in (`afconvert`); no AccurateRip check |
 | Drive | any DVD/Blu-ray drive, USB is fine | same |
 
 A free [TMDB API key](https://www.themoviedb.org/settings/api) is strongly recommended.
@@ -75,7 +76,7 @@ Without one, a disc is only named automatically if its label includes the year.
 # pipx keeps it in its own environment (apt install pipx / brew install pipx)
 pipx install "git+https://github.com/jad77/JFRipper.git"
 
-# with audio-CD lookups (Linux)
+# Linux: also name CDs before whipper starts (needs libdiscid)
 pipx install "jfripper[cd] @ git+https://github.com/jad77/JFRipper.git"
 ```
 

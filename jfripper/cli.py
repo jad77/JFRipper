@@ -114,9 +114,13 @@ def cmd_check(args):
     if config.IS_LINUX:
         check_line(bool(shutil.which("whipper")), "whipper (audio CDs)",
                    shutil.which("whipper") or "not installed; audio CDs will fail")
+    if config.IS_MAC:
+        from . import cd
+        check_line(bool(shutil.which("afconvert")), "afconvert (audio CDs)",
+                   "built in; writes " + ("FLAC" if cd.afconvert_flac() else "Apple Lossless"))
     print("Python modules")
     for mod, why in (("guessit", "naming"), ("mutagen", "music tags"),
-                     ("musicbrainzngs", "CD lookup, optional"), ("discid", "CD lookup, optional")):
+                     ("discid", "Linux CD lookup, optional")):
         found = importlib.util.find_spec(mod) is not None
         if mod == "discid" and not found:
             found = importlib.util.find_spec("libdiscid") is not None

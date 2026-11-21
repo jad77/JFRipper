@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-cd = ["discid>=1.2", "musicbrainzngs>=0.7"]
+cd = ["discid>=1.2"]  # Linux: names CDs before whipper starts (whipper tags them either way)
 
 [project.scripts]
 jfripper = "jfripper.cli:main"

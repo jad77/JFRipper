@@ -293,6 +293,136 @@ class EndToEndTests(TempLibrary):
         self.assertEqual(drive.ejected, 1)
 
 
+# ---------------------------------------------------------------- audio CDs
+
+ABBEY_ROAD = {"id": "CK7Xuml3r3x0Xcde31RT2Uy.2cU-", "sectors": 213430,
+              "offsets": [183, 19680, 33408, 48953, 64453, 77290, 112325, 126245, 138648, 156845,
+                          167820, 172795, 178243, 187073, 193940, 201175, 211690]}
+
+
+def toc_plist(offsets, leadout, lead_in_included=True, data_track=None):
+    """A .TOC.plist like the one macOS puts on a mounted audio CD."""
+    import plistlib
+    shift = 0 if lead_in_included else 150
+    tracks = [{"Point": i + 1, "Start Block": o - shift, "Data": False}
+              for i, o in enumerate(offsets)]
+    sessions = [{"First Track": 1, "Last Track": len(offsets), "Leadout Block": leadout - shift,
+                 "Session Number": 1, "Track Array": tracks}]
+    if data_track:
+        sessions.append({"First Track": len(offsets) + 1, "Last Track": len(offsets) + 1,
+                         "Leadout Block": data_track + 30000, "Session Number": 2,
+                         "Track Array": [{"Point": len(offsets) + 1, "Start Block": data_track,
+                                          "Data": True}]})
+    return plistlib.dumps({"Format": "CDDA", "Sessions": sessions})
+
+
+class CDLogicTests(TempLibrary):
+    def test_disc_id_matches_musicbrainz(self):
+        from jfripper.cd import disc_id
+        o = ABBEY_ROAD["offsets"]
+        self.assertEqual(disc_id(1, len(o), ABBEY_ROAD["sectors"], o), ABBEY_ROAD["id"])
+
+    def test_read_toc_either_numbering(self):
+        from jfripper.cd import disc_id, read_toc
+        for included in (True, False):
+            path = os.path.join(self.root, f"toc-{included}.plist")
+            with open(path, "wb") as f:
+                f.write(toc_plist(ABBEY_ROAD["offsets"], ABBEY_ROAD["sectors"], included))
+            self.assertEqual(disc_id(*read_toc(path)), ABBEY_ROAD["id"], included)
+
+    def test_read_toc_enhanced_cd(self):
+        from jfripper.cd import read_toc
+        path = os.path.join(self.root, "toc.plist")
+        with open(path, "wb") as f:
+            f.write(toc_plist([150, 20000, 40000], 60000, data_track=72000))
+        first, last, leadout, offsets = read_toc(path)
+        self.assertEqual((first, last, leadout, offsets), (1, 3, 72000 - 11400, [150, 20000, 40000]))
+
+    def test_musicbrainz_parse(self):
+        import io
+        from jfripper import cd
+        reply = {"releases": [{"id": "rel-1", "title": "Abbey Road", "date": "1987-04-30",
+                               "artist-credit": [{"name": "The Beatles", "joinphrase": ""}],
+                               "media": [{"position": 1, "discs": [{"id": ABBEY_ROAD["id"]}],
+                                          "tracks": [{"title": "Come Together"},
+                                                     {"title": "Something"}]}]}]}
+        real = cd.urllib.request.urlopen
+        cd.urllib.request.urlopen = lambda req, timeout: io.BytesIO(json.dumps(reply).encode())
+        try:
+            album = cd.musicbrainz_lookup(ABBEY_ROAD["id"])
+        finally:
+            cd.urllib.request.urlopen = real
+        self.assertEqual((album["artist"], album["album"], album["date"], album["discs"]),
+                         ("The Beatles", "Abbey Road", "1987", 1))
+        self.assertEqual(album["tracks"][1], {"title": "Something", "artist": "The Beatles"})
+
+
+class FakeMacCD(FakeDrive):
+    def __init__(self, mount):
+        super().__init__()
+        self.mount = mount
+
+    def is_audio_cd(self):
+        return True
+
+    def mount_point(self, wait=20):
+        return self.mount
+
+
+@unittest.skipUnless(sys.platform == "darwin" and shutil.which("afconvert") and HAVE_FFMPEG
+                     and HAVE_DEPS, "needs macOS afconvert, ffmpeg, guessit and mutagen")
+class MacCDTests(TempLibrary):
+    def setUp(self):
+        super().setUp()
+        from jfripper import cd
+        self.cd = cd
+        self.sent = []
+        cd.notify = lambda s, b: self.sent.append((s, b))
+        # What macOS shows for a mounted 3-track audio CD.
+        self.mount = os.path.join(self.root, "Audio CD")
+        os.makedirs(self.mount)
+        for n in (1, 2, 3):
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            f"sine=frequency={220 * n}:sample_rate=44100", "-t", "2", "-ac", "2",
+                            "-c:a", "pcm_s16be", os.path.join(self.mount, f"{n} Track {n}.aiff")],
+                           check=True)
+        with open(os.path.join(self.mount, ".TOC.plist"), "wb") as f:
+            f.write(toc_plist([150, 300, 450], 600))
+        self._lookup = cd.musicbrainz_lookup
+
+    def tearDown(self):
+        self.cd.musicbrainz_lookup = self._lookup
+        super().tearDown()
+
+    def test_known_cd_is_filed(self):
+        self.cd.musicbrainz_lookup = lambda discid: {
+            "artist": "Some Band", "album": "First Album", "date": "2001", "album_id": "rel-1",
+            "disc": 1, "discs": 1,
+            "tracks": [{"title": t, "artist": "Some Band"} for t in ("One", "Two", "Three")]}
+        drive = FakeMacCD(self.mount)
+        self.cd.rip_cd(drive)
+        album = os.path.join(self.cfg.music, "Some Band", "First Album")
+        self.assertEqual(sorted(os.listdir(album)), ["01 One.flac", "02 Two.flac", "03 Three.flac"])
+        self.assertEqual(drive.ejected, 1)
+        from mutagen import File as MutagenFile
+        tags = MutagenFile(os.path.join(album, "02 Two.flac"), easy=True)
+        self.assertEqual((tags["album"][0], tags["tracknumber"][0], tags["date"][0]),
+                         ("First Album", "2/3", "2001"))
+        self.assertIn("is in Jellyfin", self.sent[-1][0])
+
+    def test_unknown_cd_waits_then_names(self):
+        from jfripper import jobs, naming
+        self.cd.musicbrainz_lookup = lambda discid: None
+        self.cd.rip_cd(FakeMacCD(self.mount))
+        job = jobs.all_jobs()[0]
+        self.assertEqual(job["stage"], "needs_name")
+        self.assertEqual(len(os.listdir(job["path"])), 3)
+        res = naming.cd(job["stamp"], "Mystery Band", "Demo", "1999", ["A", "B", "C"])
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.cfg.music, "Mystery Band", "Demo"))),
+                         ["01 A.flac", "02 B.flac", "03 C.flac"])
+
+
 @unittest.skipUnless(HAVE_FFMPEG and HAVE_DEPS, "needs ffmpeg, guessit and mutagen")
 class SorterTests(TempLibrary):
     def test_music_and_unknown(self):
