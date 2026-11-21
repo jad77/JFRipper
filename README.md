@@ -2,7 +2,7 @@
 
 **Put a disc in the drive. A few minutes later it's in your Jellyfin library, properly named.**
 
-JFRipper is a small background service for Linux and macOS that turns a disc drive into a
+JFRipper is a small background service for Linux and macOS developed by me with some help from Claude that turns a disc drive into a
 "drop slot" for your media server:
 
 - **DVDs and Blu-rays** → the main feature is ripped with MakeMKV, converted to H.264 if it
